@@ -1,0 +1,37 @@
+# ===== PYTHON =====
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+
+# Secrets
+.env
+
+# Jupyter
+.ipynb_checkpoints/
+
+# ARDUINO
+# Compiled output
+*.elf
+*.hex
+*.bin
+*.map
+
+# Build folders
+build/
+.arduino15/
+*.cache
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
