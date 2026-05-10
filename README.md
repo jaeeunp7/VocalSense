@@ -1,5 +1,3 @@
-# VocalSense
-
 # EMG + Audio Vocal Prototype
 
 Three-week prototype for an EMG-based vocal state classifier.
