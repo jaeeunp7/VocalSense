@@ -1,17 +1,17 @@
 """
 train.py
 
-Loads recorded CSVs, slices them into windows, extracts features, and
-trains a small classifier. Saves the trained model to model.pkl so
-live_viewer.py can pick it up.
+Loads recorded CSVs, slices them into 2-second windows, extracts features,
+and trains a multi-label Random Forest classifier predicting four binary
+vocal-quality labels (straining, vocal_resonance, phonation, breath_support).
 
 Usage:
     python train.py --data data/ --out model.pkl
 
 Outputs:
     - model.pkl                 (pickled scikit-learn pipeline)
-    - confusion_matrix.png      (held-out test set confusion matrix)
-    - Printed classification report
+    - confusion_matrices.png    (one 2x2 confusion matrix per label)
+    - Printed per-label classification report
 """
 
 import argparse
@@ -25,45 +25,78 @@ import matplotlib.pyplot as plt
 
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import classification_report, multilabel_confusion_matrix, ConfusionMatrixDisplay
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 # must match live_viewer.py
 SAMPLE_RATE = 1000
-WINDOW_MS = 100
-HOP_MS = 50
+WINDOW_MS = 2000            # 2-second windows = one "data point"
+HOP_MS = 1000               # 50% overlap doubles the training samples
 WINDOW_SAMPLES = int(SAMPLE_RATE * WINDOW_MS / 1000)
 HOP_SAMPLES = int(SAMPLE_RATE * HOP_MS / 1000)
 
+LABEL_CATEGORIES = ['straining', 'vocal_resonance', 'phonation', 'breath_support']
 
-def extract_features(emg_window, audio_window):
-    """Same feature function used at inference time. Keep these in sync."""
+
+def extract_features(emg_window, piezo_window):
+    """
+    Compute features from a 2-second window of EMG + piezo.
+    Same function used at inference time -- keep in sync with live_viewer.py.
+
+    Features (7 total):
+      EMG:
+        - RMS                   (overall activation)
+        - mean absolute value   (alternative activation measure)
+        - zero-crossing rate    (frequency content)
+        - waveform length       (signal complexity / variation)
+      Piezo:
+        - RMS                   (vibration energy)
+        - peak-to-peak          (max minus min)
+        - dominant frequency Hz (FFT peak -- approximates vocal fundamental)
+    """
     emg = np.asarray(emg_window, dtype=np.float32)
-    audio = np.asarray(audio_window, dtype=np.float32)
+    piezo = np.asarray(piezo_window, dtype=np.float32)
     emg = emg - emg.mean()
-    audio = audio - audio.mean()
+    piezo = piezo - piezo.mean()
+
     emg_rms = float(np.sqrt(np.mean(emg ** 2)))
-    audio_rms = float(np.sqrt(np.mean(audio ** 2)))
+    emg_mav = float(np.mean(np.abs(emg)))
     emg_zcr = float(np.mean(np.diff(np.sign(emg)) != 0))
-    audio_zcr = float(np.mean(np.diff(np.sign(audio)) != 0))
-    return [emg_rms, emg_zcr, audio_rms, audio_zcr]
+    emg_wl = float(np.sum(np.abs(np.diff(emg))))
+
+    piezo_rms = float(np.sqrt(np.mean(piezo ** 2)))
+    piezo_peak = float(np.max(piezo) - np.min(piezo))
+
+    # Dominant frequency in the piezo signal (vocal fundamental proxy)
+    fft_mag = np.abs(np.fft.rfft(piezo))
+    freqs = np.fft.rfftfreq(len(piezo), d=1.0 / SAMPLE_RATE)
+    # skip DC (index 0) and ignore frequencies below 50 Hz (noise floor)
+    valid = freqs > 50
+    if valid.any() and fft_mag[valid].max() > 0:
+        peak_idx = np.argmax(fft_mag[valid])
+        piezo_dom_freq = float(freqs[valid][peak_idx])
+    else:
+        piezo_dom_freq = 0.0
+
+    return [emg_rms, emg_mav, emg_zcr, emg_wl, piezo_rms, piezo_peak, piezo_dom_freq]
 
 
 def windowize(df):
-    """Slide a window across one CSV. Yields (features, label) per window."""
+    """Slide a 2-second window across one take's CSV.
+    Yields (features, label_vector) per window."""
     emg = df['emg'].values
-    audio = df['audio'].values
-    labels = df['label'].values
+    piezo = df['piezo'].values
+    label_cols = df[LABEL_CATEGORIES].values  # shape (n_samples, 4)
 
-    for start in range(0, len(emg) - WINDOW_SAMPLES, HOP_SAMPLES):
+    for start in range(0, len(emg) - WINDOW_SAMPLES + 1, HOP_SAMPLES):
         end = start + WINDOW_SAMPLES
-        # only use the window if the label is consistent across it
-        window_labels = labels[start:end]
-        if len(set(window_labels)) != 1:
-            continue
-        feats = extract_features(emg[start:end], audio[start:end])
-        yield feats, window_labels[0]
+        # labels should be constant across the whole take, but verify
+        window_labels = label_cols[start:end]
+        # take the first row's labels; warn if they vary within the window
+        labels = window_labels[0]
+        feats = extract_features(emg[start:end], piezo[start:end])
+        yield feats, labels
 
 
 def main():
@@ -75,46 +108,68 @@ def main():
     csv_files = sorted(glob.glob(os.path.join(args.data, '*.csv')))
     if not csv_files:
         raise SystemExit(f'No CSVs found in {args.data}')
-    print(f'Found {len(csv_files)} CSV file(s):')
-    for f in csv_files:
-        print(f'  {f}')
+    print(f'Found {len(csv_files)} CSV file(s).')
 
-    X, y = [], []
+    X, Y = [], []
     for path in csv_files:
         df = pd.read_csv(path)
-        for feats, label in windowize(df):
+        missing = [c for c in LABEL_CATEGORIES if c not in df.columns]
+        if missing:
+            print(f'  Skipping {path} -- missing columns: {missing}')
+            continue
+        n_before = len(X)
+        for feats, labels in windowize(df):
             X.append(feats)
-            y.append(label)
+            Y.append(labels)
+        print(f'  {os.path.basename(path)}: +{len(X) - n_before} windows')
+
+    if len(X) == 0:
+        raise SystemExit('No valid windows extracted. Are CSVs long enough (>=2s)?')
 
     X = np.array(X)
-    y = np.array(y)
-    print(f'\nExtracted {len(X)} windows across {len(set(y))} classes')
-    print('Class counts:')
-    for cls in sorted(set(y)):
-        print(f'  {cls:15s} {(y == cls).sum()}')
+    Y = np.array(Y)
+    print(f'\nTotal: {len(X)} windows, {X.shape[1]} features, {Y.shape[1]} labels')
+    print('Per-label TRUE counts (out of {} windows):'.format(len(X)))
+    for i, name in enumerate(LABEL_CATEGORIES):
+        true_count = int(Y[:, i].sum())
+        print(f'  {name:18s} {true_count:4d}  ({100*true_count/len(X):.0f}%)')
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.25, random_state=42, stratify=y
+    # Stratifying by a single column for multi-label is tricky -- just
+    # do a simple random split. With small datasets, you may want to
+    # verify each label has both classes in test set.
+    X_train, X_test, Y_train, Y_test = train_test_split(
+        X, Y, test_size=0.25, random_state=42
     )
 
     pipeline = Pipeline([
         ('scaler', StandardScaler()),
-        ('clf', RandomForestClassifier(n_estimators=200, random_state=42)),
+        ('clf', RandomForestClassifier(
+            n_estimators=200, random_state=42, class_weight='balanced'
+        )),
     ])
-    pipeline.fit(X_train, y_train)
+    # RandomForestClassifier handles multi-output natively when Y is 2D
+    pipeline.fit(X_train, Y_train)
 
-    y_pred = pipeline.predict(X_test)
-    print('\nClassification report (held-out test set):')
-    print(classification_report(y_test, y_pred))
+    Y_pred = pipeline.predict(X_test)
 
-    cm = confusion_matrix(y_test, y_pred, labels=sorted(set(y)))
-    disp = ConfusionMatrixDisplay(cm, display_labels=sorted(set(y)))
-    fig, ax = plt.subplots(figsize=(6, 5))
-    disp.plot(ax=ax, cmap='Blues', colorbar=False)
-    plt.title('Confusion Matrix')
+    print('\nPer-label classification report (held-out test set):')
+    print(classification_report(
+        Y_test, Y_pred,
+        target_names=LABEL_CATEGORIES,
+        zero_division=0
+    ))
+
+    # One confusion matrix per label
+    cms = multilabel_confusion_matrix(Y_test, Y_pred)
+    fig, axes = plt.subplots(1, len(LABEL_CATEGORIES),
+                             figsize=(4 * len(LABEL_CATEGORIES), 4))
+    for i, (cm, name) in enumerate(zip(cms, LABEL_CATEGORIES)):
+        disp = ConfusionMatrixDisplay(cm, display_labels=['false', 'true'])
+        disp.plot(ax=axes[i], cmap='Blues', colorbar=False)
+        axes[i].set_title(name)
     plt.tight_layout()
-    plt.savefig('confusion_matrix.png', dpi=120)
-    print('Saved confusion_matrix.png')
+    plt.savefig('confusion_matrices.png', dpi=120)
+    print('Saved confusion_matrices.png')
 
     with open(args.out, 'wb') as f:
         pickle.dump(pipeline, f)
