@@ -411,6 +411,9 @@ def main():
     if args.api_key:
         api_key_store['key'] = args.api_key
 
+     # Render sets PORT automatically — read it, fall back to 5000 locally
+    port = int(os.environ.get('PORT', 5000))
+    
     print(f'\n  VocalSense Dashboard: http://{args.host}:{args.port}\n')
     if not model:
         print('  WARNING: No model.pkl found. Run train.py first.\n')
