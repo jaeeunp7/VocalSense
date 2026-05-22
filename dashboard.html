@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>VocalSense — Analysis Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{
+  --bg:#0b0b1a;--card:#131329;--card-border:#1e1e3a;--card-hover:#1a1a38;
+  --accent:#00d4ff;--accent-dim:rgba(0,212,255,0.12);
+  --good:#00e676;--good-dim:rgba(0,230,118,0.10);
+  --bad:#ff5252;--bad-dim:rgba(255,82,82,0.10);
+  --warn:#ffab40;
+  --text:#cdd6f4;--text-dim:#6c7086;--text-bright:#fff;
+  --mono:'JetBrains Mono',monospace;--sans:'DM Sans',system-ui,sans-serif;
+  --radius:12px;
+}
+html{font-size:15px}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);min-height:100vh;padding:24px}
+
+/* header */
+.header{display:flex;align-items:center;justify-content:space-between;margin-bottom:28px}
+.logo{font-size:1.6rem;font-weight:700;letter-spacing:-0.5px;
+  background:linear-gradient(135deg,var(--accent),#7c4dff);
+  -webkit-background-clip:text;-webkit-text-fill-color:transparent}
+.logo span{font-weight:400;opacity:0.7;-webkit-text-fill-color:var(--text-dim)}
+
+/* cards */
+.card{background:var(--card);border:1px solid var(--card-border);border-radius:var(--radius);
+  padding:24px;position:relative;margin-bottom:20px}
+.card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,var(--accent),transparent);opacity:0.4}
+.card-title{font-size:0.72rem;font-weight:600;letter-spacing:1.5px;
+  text-transform:uppercase;color:var(--text-dim);margin-bottom:16px}
+
+/* upload zone */
+.upload-zone{
+  border:2px dashed var(--card-border);border-radius:var(--radius);
+  padding:40px;text-align:center;cursor:pointer;
+  transition:all 0.3s ease;
+}
+.upload-zone:hover,.upload-zone.drag-over{
+  border-color:var(--accent);background:var(--accent-dim);
+}
+.upload-zone h3{font-size:1.1rem;margin-bottom:8px;color:var(--text-bright)}
+.upload-zone p{font-size:0.85rem;color:var(--text-dim)}
+.upload-zone input[type="file"]{display:none}
+
+/* existing files list */
+.file-list{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
+.file-chip{
+  font-family:var(--mono);font-size:0.72rem;
+  padding:6px 14px;border-radius:8px;cursor:pointer;
+  background:rgba(255,255,255,0.04);border:1px solid var(--card-border);
+  transition:all 0.2s ease;
+}
+.file-chip:hover{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.file-chip.active{border-color:var(--accent);background:var(--accent-dim);color:var(--accent)}
+.file-divider{font-size:0.78rem;color:var(--text-dim);margin-top:18px;margin-bottom:8px}
+
+/* results */
+.results{display:none}
+.results.visible{display:block}
+.grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+@media(max-width:900px){.grid-2{grid-template-columns:1fr}}
+
+/* charts */
+.chart-wrap{margin-bottom:8px}
+.chart-wrap canvas{width:100%!important;height:120px!important}
+.chart-label{font-family:var(--mono);font-size:0.7rem;color:var(--text-dim);margin-bottom:4px}
+
+/* prediction heatmap */
+.heatmap{overflow-x:auto;padding-bottom:8px}
+.heatmap-row{display:flex;align-items:center;margin-bottom:4px}
+.heatmap-label{
+  font-size:0.72rem;min-width:120px;text-align:right;
+  padding-right:12px;color:var(--text-dim);font-family:var(--mono);
+}
+.heatmap-cells{display:flex;gap:2px;flex:1}
+.heatmap-cell{
+  width:18px;height:22px;border-radius:3px;
+  transition:all 0.2s ease;cursor:default;position:relative;
+}
+.heatmap-cell.true-good{background:var(--good);opacity:0.8}
+.heatmap-cell.true-bad{background:var(--bad);opacity:0.8}
+.heatmap-cell.false-good{background:rgba(0,230,118,0.15)}
+.heatmap-cell.false-bad{background:rgba(255,82,82,0.15)}
+.heatmap-cell:hover{opacity:1;transform:scaleY(1.3)}
+.heatmap-time{display:flex;gap:2px;margin-top:4px;padding-left:132px}
+.heatmap-time span{
+  font-family:var(--mono);font-size:0.6rem;color:var(--text-dim);
+  min-width:18px;text-align:center;
+}
+
+/* aggregate stats */
+.stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stat-card{padding:16px;border-radius:10px;border:1px solid var(--card-border);
+  background:rgba(255,255,255,0.02)}
+.stat-value{font-family:var(--mono);font-size:1.5rem;font-weight:600;
+  color:var(--text-bright);margin-bottom:2px}
+.stat-label{font-size:0.72rem;color:var(--text-dim)}
+.stat-bar{height:6px;border-radius:3px;background:rgba(255,255,255,0.06);
+  margin-top:8px;overflow:hidden}
+.stat-bar-fill{height:100%;border-radius:3px;transition:width 0.6s ease}
+
+/* feature importance */
+.feat-bar-item{display:flex;align-items:center;gap:8px;margin-bottom:8px;
+  font-family:var(--mono);font-size:0.72rem}
+.feat-bar-name{min-width:110px;color:var(--text-dim);text-align:right}
+.feat-bar{flex:1;height:8px;border-radius:4px;background:rgba(255,255,255,0.05);overflow:hidden}
+.feat-bar-fill{height:100%;border-radius:4px;
+  background:linear-gradient(90deg,var(--accent),#7c4dff);transition:width 0.5s ease}
+
+/* coaching */
+.coaching-msg{
+  font-size:0.95rem;line-height:1.7;padding:20px;border-radius:10px;
+  background:rgba(255,255,255,0.03);border-left:3px solid var(--accent);
+  margin-bottom:16px;white-space:pre-wrap;
+}
+.coaching-msg.error{border-left-color:var(--bad);color:var(--bad)}
+.coaching-msg.placeholder{color:var(--text-dim);border-left-color:var(--card-border)}
+.btn{font-family:var(--sans);font-size:0.82rem;font-weight:600;
+  padding:10px 22px;border-radius:8px;border:none;cursor:pointer;transition:all 0.2s ease}
+.btn-primary{background:var(--accent);color:#000}
+.btn-primary:hover{background:#33ddff;transform:translateY(-1px)}
+.btn-primary:disabled{opacity:0.4;cursor:not-allowed;transform:none}
+.btn-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.api-input{font-family:var(--mono);font-size:0.78rem;padding:9px 14px;
+  border-radius:8px;flex:1;min-width:200px;
+  background:rgba(255,255,255,0.05);border:1px solid var(--card-border);
+  color:var(--text);outline:none}
+.api-input:focus{border-color:var(--accent)}
+.api-input::placeholder{color:var(--text-dim)}
+.coaching-meta{font-family:var(--mono);font-size:0.65rem;color:var(--text-dim);margin-top:8px}
+
+/* loading */
+.loading{text-align:center;padding:40px;color:var(--text-dim)}
+.spinner{display:inline-block;width:24px;height:24px;border:2px solid var(--card-border);
+  border-top-color:var(--accent);border-radius:50%;animation:spin 0.8s linear infinite;margin-bottom:12px}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* filename badge */
+.file-badge{font-family:var(--mono);font-size:0.78rem;padding:6px 14px;
+  border-radius:8px;background:var(--accent-dim);color:var(--accent);
+  display:inline-block;margin-bottom:16px}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="logo">VocalSense <span>Analysis</span></div>
+</div>
+
+<!-- UPLOAD SECTION -->
+<div class="card" id="uploadCard">
+  <div class="card-title">Load Recording</div>
+  <div class="upload-zone" id="uploadZone" onclick="document.getElementById('fileInput').click()">
+    <h3>Drop a CSV file here or click to upload</h3>
+    <p>Accepts .csv files from record.py (columns: time_s, emg, piezo, ...)</p>
+    <input type="file" id="fileInput" accept=".csv" />
+  </div>
+  <div class="file-divider" id="existingLabel" style="display:none">or choose from your data/ folder:</div>
+  <div class="file-list" id="fileList"></div>
+</div>
+
+<!-- RESULTS (hidden until a file is analyzed) -->
+<div class="results" id="results">
+
+  <div class="file-badge" id="fileBadge"></div>
+
+  <!-- SIGNALS + HEATMAP -->
+  <div class="card">
+    <div class="card-title">Signal Waveforms</div>
+    <div class="chart-wrap">
+      <div class="chart-label">EMG — submental muscle activation</div>
+      <canvas id="emgChart"></canvas>
+    </div>
+    <div class="chart-wrap">
+      <div class="chart-label">Piezo — vocal fold vibration</div>
+      <canvas id="piezoChart"></canvas>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Prediction Timeline — each block = 2-second window</div>
+    <div class="heatmap" id="heatmap"></div>
+  </div>
+
+  <div class="grid-2">
+    <!-- AGGREGATE STATS -->
+    <div class="card">
+      <div class="card-title">Session Summary</div>
+      <div class="stats-grid" id="statsGrid"></div>
+      <div style="margin-top:20px">
+        <div class="card-title" style="margin-bottom:12px">Feature Importance</div>
+        <div id="featBars"></div>
+      </div>
+    </div>
+
+    <!-- CLAUDE COACHING -->
+    <div class="card">
+      <div class="card-title">AI Vocal Coach — powered by Groq</div>
+      <div id="coachingMsg" class="coaching-msg placeholder">
+        Analyze a recording first, then click "Get Coaching" for AI feedback.
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="coachBtn" onclick="getCoaching()" disabled>Get Coaching</button>
+      </div>
+      <div style="margin-top:14px">
+        <div class="btn-row">
+          <input type="password" class="api-input" id="apiKeyInput"
+                 placeholder="Paste Groq API key (gsk_...)" />
+          <button class="btn btn-primary" style="background:var(--card-border);color:var(--text)"
+                  onclick="saveApiKey()">Save</button>
+        </div>
+      </div>
+      <div class="coaching-meta" id="coachingMeta"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ---- Charts -------------------------------------------------------------
+
+let emgChart = null;
+let piezoChart = null;
+
+function createChart(canvasId, color, data, labels) {
+  const ctx = document.getElementById(canvasId).getContext('2d');
+  const gradient = ctx.createLinearGradient(0, 0, 0, 120);
+  gradient.addColorStop(0, color.replace(')', ',0.2)').replace('rgb', 'rgba'));
+  gradient.addColorStop(1, 'transparent');
+
+  if (canvasId === 'emgChart' && emgChart) emgChart.destroy();
+  if (canvasId === 'piezoChart' && piezoChart) piezoChart.destroy();
+
+  const chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels: labels,
+      datasets: [{
+        data: data,
+        borderColor: color,
+        backgroundColor: gradient,
+        fill: true,
+        pointRadius: 0,
+        borderWidth: 1.2,
+        tension: 0.15
+      }]
+    },
+    options: {
+      animation: false,
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: {
+          ticks: {
+            maxTicksLimit: 8,
+            color: '#6c7086',
+            font: { family: 'JetBrains Mono', size: 9 },
+            callback: (val, idx, ticks) => {
+              const label = labels[idx];
+              return label !== undefined ? parseFloat(label).toFixed(1) + 's' : '';
+            }
+          },
+          grid: { color: 'rgba(255,255,255,0.03)' }
+        },
+        y: {
+          ticks: { color: '#6c7086', font: { family: 'JetBrains Mono', size: 9 } },
+          grid: { color: 'rgba(255,255,255,0.04)' },
+          border: { color: 'rgba(255,255,255,0.06)' }
+        }
+      }
+    }
+  });
+
+  if (canvasId === 'emgChart') emgChart = chart;
+  else piezoChart = chart;
+}
+
+
+// ---- File upload --------------------------------------------------------
+
+const uploadZone = document.getElementById('uploadZone');
+const fileInput = document.getElementById('fileInput');
+
+['dragenter','dragover'].forEach(e =>
+  uploadZone.addEventListener(e, ev => { ev.preventDefault(); uploadZone.classList.add('drag-over'); }));
+['dragleave','drop'].forEach(e =>
+  uploadZone.addEventListener(e, ev => { ev.preventDefault(); uploadZone.classList.remove('drag-over'); }));
+
+uploadZone.addEventListener('drop', ev => {
+  const file = ev.dataTransfer.files[0];
+  if (file && file.name.endsWith('.csv')) uploadFile(file);
+});
+
+fileInput.addEventListener('change', () => {
+  if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+});
+
+async function uploadFile(file) {
+  showLoading();
+  const formData = new FormData();
+  formData.append('file', file);
+  try {
+    const resp = await fetch('/analyze', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); hideResults(); return; }
+    renderResults(data);
+  } catch (e) {
+    alert('Upload failed: ' + e.message);
+    hideResults();
+  }
+}
+
+async function analyzeExisting(filename) {
+  showLoading();
+  document.querySelectorAll('.file-chip').forEach(c => c.classList.remove('active'));
+  event.target.classList.add('active');
+  try {
+    const resp = await fetch('/analyze-existing', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ filename })
+    });
+    const data = await resp.json();
+    if (data.error) { alert(data.error); hideResults(); return; }
+    renderResults(data);
+  } catch (e) {
+    alert('Analysis failed: ' + e.message);
+    hideResults();
+  }
+}
+
+function showLoading() {
+  const r = document.getElementById('results');
+  r.className = 'results visible';
+  r.innerHTML = '<div class="loading"><div class="spinner"></div><div>Analyzing recording...</div></div>';
+}
+
+function hideResults() {
+  document.getElementById('results').className = 'results';
+  document.getElementById('results').innerHTML = '';
+}
+
+
+// ---- Render results -----------------------------------------------------
+
+function renderResults(data) {
+  // Restore the results HTML structure
+  document.getElementById('results').className = 'results visible';
+  document.getElementById('results').innerHTML = buildResultsHTML();
+
+  // File badge
+  document.getElementById('fileBadge').textContent = data.filename || 'uploaded file';
+
+  // Signal charts
+  const timeLabels = data.signals.time.map(t => t.toFixed(2));
+  createChart('emgChart', 'rgb(0, 170, 255)', data.signals.emg, timeLabels);
+  createChart('piezoChart', 'rgb(0, 230, 118)', data.signals.piezo, timeLabels);
+
+  // Prediction heatmap
+  renderHeatmap(data.windows);
+
+  // Aggregate stats
+  renderStats(data.aggregate);
+
+  // Feature importance
+  renderFeatures(data.feature_importances);
+
+  // Enable coaching button
+  document.getElementById('coachBtn').disabled = false;
+  document.getElementById('coachingMsg').textContent =
+    'Recording analyzed. Click "Get Coaching" for AI feedback on this session.';
+}
+
+function buildResultsHTML() {
+  return `
+    <div class="file-badge" id="fileBadge"></div>
+    <div class="card">
+      <div class="card-title">Signal Waveforms</div>
+      <div class="chart-wrap">
+        <div class="chart-label">EMG — submental muscle activation</div>
+        <canvas id="emgChart"></canvas>
+      </div>
+      <div class="chart-wrap">
+        <div class="chart-label">Piezo — vocal fold vibration</div>
+        <canvas id="piezoChart"></canvas>
+      </div>
+    </div>
+    <div class="card">
+      <div class="card-title">Prediction Timeline — each block = 2-second window</div>
+      <div class="heatmap" id="heatmap"></div>
+    </div>
+    <div class="grid-2">
+      <div class="card">
+        <div class="card-title">Session Summary</div>
+        <div class="stats-grid" id="statsGrid"></div>
+        <div style="margin-top:20px">
+          <div class="card-title" style="margin-bottom:12px">Feature Importance</div>
+          <div id="featBars"></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-title">AI Vocal Coach — powered by Groq</div>
+        <div id="coachingMsg" class="coaching-msg placeholder">Analyzing...</div>
+        <div class="btn-row">
+          <button class="btn btn-primary" id="coachBtn" onclick="getCoaching()">Get Coaching</button>
+        </div>
+        <div style="margin-top:14px">
+          <div class="btn-row">
+            <input type="password" class="api-input" id="apiKeyInput"
+                   placeholder="Paste Groq API key (gsk_...)" />
+            <button class="btn btn-primary" style="background:var(--card-border);color:var(--text)"
+                    onclick="saveApiKey()">Save</button>
+          </div>
+        </div>
+        <div class="coaching-meta" id="coachingMeta"></div>
+      </div>
+    </div>
+  `;
+}
+
+function renderHeatmap(windows) {
+  const container = document.getElementById('heatmap');
+  if (!windows || windows.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-dim)">No windows to display</div>';
+    return;
+  }
+
+  const labels = [
+    { key: 'straining', name: 'straining', invert: true },
+    { key: 'vocal_resonance', name: 'resonance', invert: false },
+    { key: 'phonation', name: 'phonation', invert: false },
+    { key: 'breath_support', name: 'breath support', invert: false },
+  ];
+
+  let html = '';
+  for (const label of labels) {
+    html += '<div class="heatmap-row">';
+    html += `<div class="heatmap-label">${label.name}</div>`;
+    html += '<div class="heatmap-cells">';
+    for (const w of windows) {
+      const pred = w.predictions[label.key];
+      const isTrue = pred.value === 1;
+      const isGood = label.invert ? !isTrue : isTrue;
+      const cls = isTrue
+        ? (isGood ? 'true-good' : 'true-bad')
+        : (isGood ? 'false-good' : 'false-bad');
+      const title = `${w.start_s}s–${w.end_s}s: ${isTrue ? 'TRUE' : 'false'} (${(pred.confidence*100).toFixed(0)}%)`;
+      html += `<div class="heatmap-cell ${cls}" title="${title}"></div>`;
+    }
+    html += '</div></div>';
+  }
+
+  // time axis
+  html += '<div class="heatmap-time">';
+  for (let i = 0; i < windows.length; i++) {
+    if (i % 5 === 0) {
+      html += `<span>${windows[i].start_s}s</span>`;
+    } else {
+      html += '<span></span>';
+    }
+  }
+  html += '</div>';
+
+  container.innerHTML = html;
+}
+
+function renderStats(agg) {
+  const container = document.getElementById('statsGrid');
+  const items = [
+    { label: 'Duration', value: agg.duration_s + 's', pct: null },
+    { label: 'Windows', value: agg.total_windows, pct: null },
+    { label: 'Straining', value: agg.straining_pct + '%',
+      pct: agg.straining_pct, color: 'var(--bad)', invert: true },
+    { label: 'Vocal Resonance', value: agg.vocal_resonance_pct + '%',
+      pct: agg.vocal_resonance_pct, color: 'var(--good)' },
+    { label: 'Phonation', value: agg.phonation_pct + '%',
+      pct: agg.phonation_pct, color: 'var(--good)' },
+    { label: 'Breath Support', value: agg.breath_support_pct + '%',
+      pct: agg.breath_support_pct, color: 'var(--good)' },
+  ];
+
+  container.innerHTML = items.map(item => {
+    let barHtml = '';
+    if (item.pct !== null) {
+      const barColor = item.invert
+        ? (item.pct > 50 ? 'var(--bad)' : 'var(--good)')
+        : (item.pct > 50 ? 'var(--good)' : 'var(--warn)');
+      barHtml = `<div class="stat-bar"><div class="stat-bar-fill"
+        style="width:${item.pct}%;background:${barColor}"></div></div>`;
+    }
+    return `<div class="stat-card">
+      <div class="stat-value">${item.value}</div>
+      <div class="stat-label">${item.label}</div>
+      ${barHtml}
+    </div>`;
+  }).join('');
+}
+
+function renderFeatures(importances) {
+  const container = document.getElementById('featBars');
+  if (!importances || importances.length === 0) {
+    container.innerHTML = '<div style="color:var(--text-dim);font-size:0.8rem">No model loaded</div>';
+    return;
+  }
+  const maxImp = importances[0].importance;
+  container.innerHTML = importances.map(f =>
+    `<div class="feat-bar-item">
+      <span class="feat-bar-name">${f.name}</span>
+      <div class="feat-bar"><div class="feat-bar-fill"
+        style="width:${(f.importance / maxImp * 100).toFixed(1)}%"></div></div>
+      <span style="min-width:40px">${(f.importance * 100).toFixed(1)}%</span>
+    </div>`
+  ).join('');
+}
+
+
+// ---- Coaching -----------------------------------------------------------
+
+async function getCoaching() {
+  const btn = document.getElementById('coachBtn');
+  const msgEl = document.getElementById('coachingMsg');
+  const metaEl = document.getElementById('coachingMeta');
+
+  btn.disabled = true;
+  msgEl.className = 'coaching-msg placeholder';
+  msgEl.textContent = 'Asking Groq to analyze your session...';
+
+  try {
+    const resp = await fetch('/coaching', { method: 'POST' });
+    const data = await resp.json();
+    msgEl.className = data.error ? 'coaching-msg error' : 'coaching-msg';
+    msgEl.textContent = data.message;
+    metaEl.textContent = data.error ? '' : `Generated ${new Date().toLocaleTimeString()}`;
+  } catch (e) {
+    msgEl.className = 'coaching-msg error';
+    msgEl.textContent = 'Network error: ' + e.message;
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+function saveApiKey() {
+  const input = document.getElementById('apiKeyInput');
+  const key = input.value.trim();
+  if (!key) return;
+  fetch('/set-api-key', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key })
+  }).then(() => {
+    input.value = '';
+    input.placeholder = 'Key saved ✓';
+    setTimeout(() => { input.placeholder = 'Paste Groq API key (gsk_...)'; }, 3000);
+  });
+}
+
+
+// ---- Load existing CSVs -------------------------------------------------
+
+async function loadExistingFiles() {
+  try {
+    const resp = await fetch('/list-csvs');
+    const data = await resp.json();
+    const list = document.getElementById('fileList');
+    const label = document.getElementById('existingLabel');
+    if (data.files && data.files.length > 0) {
+      label.style.display = 'block';
+      list.innerHTML = data.files.map(f =>
+        `<div class="file-chip" onclick="analyzeExisting('${f.name}')"
+          title="${f.size_kb} KB">${f.name}</div>`
+      ).join('');
+    }
+  } catch (e) {
+    console.error('Could not list CSVs:', e);
+  }
+}
+
+loadExistingFiles();
+</script>
+</body>
+</html>
