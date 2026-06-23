@@ -1,3 +1,8 @@
+# VocalSense – Singing Technique Analyzer
+
+An end-to-end hardware-software prototype built with Arduino and scikit-learn that uses sEMG and piezoelectric biosensors to analyze a singer's vocal technique in real time. The system classifies technique across 5+ categories such as straining, breath support, and phonation, and delivers personalized AI-generated feedback through a connected web interface.
+
+
 # EMG + Piezo Vocal Prototype
 
 Three-week prototype for a multi-sensor vocal state classifier.
